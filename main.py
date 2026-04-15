@@ -1,105 +1,116 @@
 import re
 import asyncio
 import os
+import subprocess
+import json
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
-# --- KONFIGURASI DARI GITHUB SECRETS ---
-# Data ini diambil otomatis dari Settings > Secrets > Actions di GitHub kamu
+# --- KONFIGURASI ---
 API_ID = int(os.getenv('API_ID'))
 API_HASH = os.getenv('API_HASH')
 SESSION_STRING = os.getenv('SESSION_STRING')
 
-# --- KONFIGURASI TUJUAN & SUMBER ---
 TUJUAN = -1002183727075
 TOPIC_ID = 153
-SUMBER_CHANNELS = [-1002186281759]
 
-# Inisialisasi Client
+# Definisi Sumber dan ID Mulai masing-masing
+# Format: { ID_CHANNEL: ID_PESAN_MULAI }
+SUMBER_CONFIG = {
+    -1002186281759: 8823,   # Sumber 1 (Pakai Topic 151)
+    -1002233445566: 33570   # Contoh Sumber 2 (Ganti dengan ID channel kedua kamu)
+}
+
+LAST_ID_FILE = "last_ids.json"
+
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
-def bersihkan_konten(teks, sumber):
-    """Fungsi untuk merapikan pesan sesuai instruksi KaK"""
-    if not teks: return ""
+def get_last_ids():
+    """Mengambil data ID terakhir dari file JSON"""
+    if os.path.exists(LAST_ID_FILE):
+        with open(LAST_ID_FILE, "r") as f:
+            return json.load(f)
+    # Jika file belum ada, gunakan ID mulai dari konfigurasi
+    return {str(k): v for k, v in SUMBER_CONFIG.items()}
+
+def save_last_id(channel_id, message_id):
+    """Menyimpan ID terakhir ke JSON dan push ke GitHub"""
+    data = get_last_ids()
+    data[str(channel_id)] = message_id
     
-    # 1. Hapus Link & Username agar rapi
+    with open(LAST_ID_FILE, "w") as f:
+        json.dump(data, f)
+    
+    try:
+        subprocess.run(["git", "config", "user.name", "GitHub Actions"])
+        subprocess.run(["git", "config", "user.email", "actions@github.com"])
+        subprocess.run(["git", "add", LAST_ID_FILE])
+        subprocess.run(["git", "commit", "-m", f"Update ID {channel_id}: {message_id} [skip ci]"])
+        subprocess.run(["git", "push"])
+    except:
+        pass
+
+def bersihkan_konten(teks, sumber):
+    if not teks: return ""
     teks = re.sub(r'https?://\S+', '', teks)
     teks = re.sub(r't\.me/\S+', '', teks)
     teks = re.sub(r'@' + re.escape(str(sumber)), '', teks, flags=re.IGNORECASE)
-    
-    # 2. Hapus tanda kurung di awal judul (Contoh: [DL NIME] Judul -> Judul)
     teks = re.sub(r'^\[.*?\]\s*', '', teks)
     
-    # 3. Mapping Penggantian Teks Khusus
     mapping = {
         "New TV Show Added!": "Series Update",
         "New Movie Added!": "Movie Update",
         "New Episode Released": "Episode Baru Tersedia",
         "Download Via": "silakan Request ke Mimin"
     }
-    
     for lama, baru in mapping.items():
         teks = teks.replace(lama, baru)
-        
     return teks.strip()
 
-async def proses_dan_kirim(message, username_asal):
-    """Logika pengiriman pesan baik media maupun teks"""
-    teks_clean = bersihkan_konten(message.message, username_asal)
+async def proses_dan_kirim(message, channel_id):
+    chat = await message.get_chat()
+    username_asal = getattr(chat, 'username', "Sumber")
+    teks_clean = bersihkan_konten(message.message, str(username_asal))
     
     try:
         if message.media:
-            # Download media ke server sementara GitHub
             path = await message.download_media()
             await client.send_file(TUJUAN, path, caption=teks_clean, reply_to=TOPIC_ID)
             if os.path.exists(path): os.remove(path)
         elif teks_clean:
             await client.send_message(TUJUAN, teks_clean, reply_to=TOPIC_ID)
-        return True
-    except Exception as e:
-        print(f"❌ Gagal mengirim: {e}")
-        return False
-
-# --- HANDLER MONITORING REAL-TIME ---
-@client.on(events.NewMessage(chats=SUMBER_CHANNELS))
-async def handler(event):
-    chat = await event.get_chat()
-    username_asal = getattr(chat, 'username', "Sumber")
-    await proses_dan_kirim(event.message, str(username_asal))
-    print(f"✨ Pesan baru terdeteksi dan diteruskan!")
-
-# --- FUNGSI TARIK HISTORY AWAL ---
-async def tarik_history():
-    print("⏳ Memulai penarikan history awal...")
-    
-    # 1. Tarik dari ID 8823 (Khusus Topic 151)
-    print("--- Menarik History Topic 151 ---")
-    async for msg in client.iter_messages(SUMBER_CHANNELS[0], min_id=8823, reply_to=151, reverse=True):
-        await proses_dan_kirim(msg, "Sumber")
-        await asyncio.sleep(1.5) # Jeda aman agar tidak kena limit
         
-    # 2. Tarik dari ID 33570 (Umum/Tanpa Topic)
-    print("--- Menarik History Umum (ID 33570) ---")
-    async for msg in client.iter_messages(SUMBER_CHANNELS[0], min_id=33570, reverse=True):
-        # Hanya ambil yang bukan bagian dari reply/topic tertentu jika ingin dipisah
-        if not msg.reply_to:
-            await proses_dan_kirim(msg, "Sumber")
-            await asyncio.sleep(1.5)
+        # Simpan ID terakhir untuk channel ini
+        save_last_id(channel_id, message.id)
+    except Exception as e:
+        print(f"❌ Gagal: {e}")
 
-    print("✅ Semua history berhasil ditarik.")
+# Monitoring Real-time untuk semua sumber
+@client.on(events.NewMessage(chats=list(SUMBER_CONFIG.keys())))
+async def handler(event):
+    await proses_dan_kirim(event.message, event.chat_id)
 
 async def main():
-    print("🚀 Bot SHeJUa sedang login...")
     await client.start()
+    last_ids = get_last_ids()
     
-    # Jalankan penarikan history dulu sebelum standby
-    await tarik_history()
+    print("⏳ Menarik history dari berbagai sumber...")
     
-    print("📡 Bot sekarang STANDBY dan MONITORING REAL-TIME...")
+    for ch_id, start_id in SUMBER_CONFIG.items():
+        # Ambil ID terakhir yang tersimpan, jika tidak ada pakai start_id
+        current_min = max(int(last_ids.get(str(ch_id), 0)), start_id)
+        
+        print(f"--- Channel {ch_id} mulai dari ID {current_min} ---")
+        
+        # Logika khusus jika channel tertentu butuh filter topic (seperti yang 151)
+        reply_filter = 151 if ch_id == -1002186281759 else None
+        
+        async for msg in client.iter_messages(ch_id, min_id=current_min, reply_to=reply_filter, reverse=True):
+            await proses_dan_kirim(msg, ch_id)
+            await asyncio.sleep(2)
+
+    print("📡 Semua history selesai. Bot Standby...")
     await client.run_until_disconnected()
 
 if __name__ == '__main__':
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("👋 Bot dimatikan.")
+    asyncio.run(main())
