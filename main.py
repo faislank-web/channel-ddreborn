@@ -42,19 +42,27 @@ def save_last_id(channel_id, message_id):
 
 def bersihkan_konten(teks, sumber):
     if not teks: return ""
+    
+    # 1. Hapus Link & Username agar rapi
     teks = re.sub(r'https?://\S+', '', teks)
     teks = re.sub(r't\.me/\S+', '', teks)
     teks = re.sub(r'@' + re.escape(str(sumber)), '', teks, flags=re.IGNORECASE)
-    teks = re.sub(r'^\[.*?\]\s*', '', teks) # Hapus tanda kurung judul
     
+    # 2. Hapus tanda kurung di awal judul (Instruksi: [DL NIME])
+    teks = re.sub(r'^\[.*?\]\s*', '', teks)
+    
+    # 3. Mapping Penggantian & Penghapusan Teks Khusus
     mapping = {
         "New TV Show Added!": "Series Update",
         "New Movie Added!": "Movie Update",
         "New Episode Released": "Episode Baru Tersedia",
-        "Download Via": "silakan Request ke Mimin"
+        "Download Via": "silakan Request ke Mimin",
+        "WGFILM21": ""  # Ini akan menghapus kata WGFILM21 secara total
     }
+    
     for lama, baru in mapping.items():
         teks = teks.replace(lama, baru)
+        
     return teks.strip()
 
 async def proses_dan_kirim(message, channel_id):
