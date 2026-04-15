@@ -5,7 +5,6 @@ import subprocess
 import json
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from telethon.errors import ConnectionError
 
 # --- KONFIGURASI ---
 API_ID = int(os.getenv('API_ID'))
@@ -21,8 +20,8 @@ client = TelegramClient(
     StringSession(SESSION_STRING), 
     API_ID, 
     API_HASH,
-    connection_retries=10, # Coba sambung ulang 10 kali jika gagal
-    retry_delay=5          # Tunggu 5 detik setiap percobaan
+    connection_retries=15, # Ditingkatkan jadi 15 kali coba
+    retry_delay=10          # Jeda 10 detik agar lebih stabil
 )
 
 def get_last_ids():
@@ -108,13 +107,15 @@ async def run_bot():
         
         async for msg in client.iter_messages(ch_id, min_id=current_min, reply_to=t["topic"], reverse=True):
             await proses_dan_kirim(msg, ch_id)
-            await asyncio.sleep(3) # Jeda lebih lama agar tidak kena reset
+            await asyncio.sleep(4) # Jeda diperlama agar koneksi tidak putus
 
     print("📡 Bot Standby memantau pesan baru...")
     await client.run_until_disconnected()
 
 if __name__ == '__main__':
+    # Memakai loop standar agar lebih stabil terhadap error koneksi
+    loop = asyncio.get_event_loop()
     try:
-        asyncio.run(run_bot())
-    except ConnectionError:
-        print("⚠️ Koneksi terputus, mencoba restart otomatis oleh GitHub Actions...")
+        loop.run_until_complete(run_bot())
+    except Exception as e:
+        print(f"⚠️ Terhenti karena: {e}")
