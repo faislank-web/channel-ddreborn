@@ -5,6 +5,7 @@ import subprocess
 import json
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
+from telethon.errors import ConnectionError
 
 # --- KONFIGURASI ---
 API_ID = int(os.getenv('API_ID'))
@@ -15,8 +16,14 @@ TUJUAN = -1002183727075
 TOPIC_ID_TUJUAN = 153
 LAST_ID_FILE = "last_ids.json"
 
-# Inisialisasi Client
-client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+# Inisialisasi Client dengan pengaturan koneksi lebih kuat
+client = TelegramClient(
+    StringSession(SESSION_STRING), 
+    API_ID, 
+    API_HASH,
+    connection_retries=10, # Coba sambung ulang 10 kali jika gagal
+    retry_delay=5          # Tunggu 5 detik setiap percobaan
+)
 
 def get_last_ids():
     if os.path.exists(LAST_ID_FILE):
@@ -31,7 +38,6 @@ def save_last_id(channel_id, message_id):
     with open(LAST_ID_FILE, "w") as f:
         json.dump(data, f, indent=4)
     
-    # Push update ke GitHub agar history tetap sinkron
     try:
         subprocess.run(["git", "config", "user.name", "GitHub Actions"])
         subprocess.run(["git", "config", "user.email", "actions@github.com"])
@@ -42,27 +48,20 @@ def save_last_id(channel_id, message_id):
 
 def bersihkan_konten(teks, sumber):
     if not teks: return ""
-    
-    # 1. Hapus Link & Username agar rapi
     teks = re.sub(r'https?://\S+', '', teks)
     teks = re.sub(r't\.me/\S+', '', teks)
     teks = re.sub(r'@' + re.escape(str(sumber)), '', teks, flags=re.IGNORECASE)
-    
-    # 2. Hapus tanda kurung di awal judul (Instruksi: [DL NIME])
     teks = re.sub(r'^\[.*?\]\s*', '', teks)
     
-    # 3. Mapping Penggantian & Penghapusan Teks Khusus
     mapping = {
         "New TV Show Added!": "Series Update",
         "New Movie Added!": "Movie Update",
         "New Episode Released": "Episode Baru Tersedia",
         "Download Via": "silakan Request ke Mimin",
-        "WGFILM21": ""  # Ini akan menghapus kata WGFILM21 secara total
+        "WGFILM21": ""
     }
-    
     for lama, baru in mapping.items():
         teks = teks.replace(lama, baru)
-        
     return teks.strip()
 
 async def proses_dan_kirim(message, channel_id):
@@ -79,44 +78,43 @@ async def proses_dan_kirim(message, channel_id):
             await client.send_message(TUJUAN, teks_clean, reply_to=TOPIC_ID_TUJUAN)
         
         save_last_id(channel_id, message.id)
-        print(f"✅ Terkirim ID {message.id} dari {channel_id}")
+        print(f"✅ Berhasil: ID {message.id}")
     except Exception as e:
-        print(f"❌ Gagal: {e}")
+        print(f"❌ Error saat kirim: {e}")
 
-# Monitoring Real-time
-@client.on(events.NewMessage(chats=[-1002186281759, -1002183727075])) # Ganti ID kedua dengan sumber asli
+@client.on(events.NewMessage(chats=[-1002186281759, -1002233445566]))
 async def handler(event):
-    # Filter: Jika dari channel pertama, hanya terima yang dari topic 151
     if event.chat_id == -1002186281759:
         if event.message.reply_to and event.message.reply_to.reply_to_msg_id == 151:
             await proses_dan_kirim(event.message, event.chat_id)
     else:
-        # Untuk channel kedua (umum), langsung proses
         await proses_dan_kirim(event.message, event.chat_id)
 
-async def main():
+async def run_bot():
+    print("🚀 Mencoba login ke Telegram...")
     await client.start()
-    last_ids = get_last_ids()
+    print("✅ Login Berhasil!")
     
-    # DAFTAR TUGAS
+    last_ids = get_last_ids()
     tugas = [
-        {"id": -1002186281759, "start": 8823, "topic": 151}, # KHUSUS TOPIK
-        {"id": -1002233445566, "start": 33570, "topic": None} # UMUM
+        {"id": -1002186281759, "start": 8823, "topic": 151},
+        {"id": -1002233445566, "start": 33570, "topic": None}
     ]
 
     for t in tugas:
         ch_id = t["id"]
-        # Ambil ID terakhir dari JSON, kalau tidak ada pakai start default
         current_min = int(last_ids.get(str(ch_id), t["start"]))
-        
-        print(f"⏳ Menarik history {ch_id} (Filter Topic: {t['topic']}) mulai ID {current_min}...")
+        print(f"⏳ Menarik pesan {ch_id} dari ID {current_min}...")
         
         async for msg in client.iter_messages(ch_id, min_id=current_min, reply_to=t["topic"], reverse=True):
             await proses_dan_kirim(msg, ch_id)
-            await asyncio.sleep(4)
+            await asyncio.sleep(3) # Jeda lebih lama agar tidak kena reset
 
-    print("📡 Monitoring Aktif...")
+    print("📡 Bot Standby memantau pesan baru...")
     await client.run_until_disconnected()
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    try:
+        asyncio.run(run_bot())
+    except ConnectionError:
+        print("⚠️ Koneksi terputus, mencoba restart otomatis oleh GitHub Actions...")
