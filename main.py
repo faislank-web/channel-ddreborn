@@ -113,7 +113,7 @@ async def main():
         
         async for msg in client.iter_messages(ch_id, min_id=current_min, reply_to=t["topic"], reverse=True):
             await proses_dan_kirim(msg, ch_id)
-            await asyncio.sleep(2)
+            await asyncio.sleep(4)
 
     print("📡 Monitoring Aktif...")
     await client.run_until_disconnected()
